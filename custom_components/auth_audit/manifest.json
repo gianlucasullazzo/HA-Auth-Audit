@@ -1,0 +1,13 @@
+{
+  "domain": "auth_audit",
+  "name": "Auth Audit",
+  "codeowners": ["@gianlucasullazzo"],
+  "config_flow": true,
+  "dependencies": ["auth", "http"],
+  "documentation": "https://github.com/gianlucasullazzo/HA-Auth-Audit",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/gianlucasullazzo/HA-Auth-Audit/issues",
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

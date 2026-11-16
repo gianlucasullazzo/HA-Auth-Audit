@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Auth Audit",
+        "description": "Log every login attempt (successful or failed) with username, IP address and client, as AUTH_AUDIT lines in the Home Assistant log and as auth_audit_login events."
+      }
+    },
+    "abort": {
+      "already_configured": "Auth Audit is already set up."
+    }
+  }
+}
