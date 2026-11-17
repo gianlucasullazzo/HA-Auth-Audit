@@ -1,5 +1,7 @@
 # Auth Audit for Home Assistant
 
+<img src="custom_components/auth_audit/brand/icon.png" width="96" alt="Auth Audit icon">
+
 Home Assistant logs a failed login only as a generic warning (IP, no username) and
 does not log successful logins at all. **Auth Audit** writes one structured line for
 every interactive login attempt and fires an event, so you can build a login history
