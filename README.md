@@ -14,12 +14,13 @@ AUTH_AUDIT result=success user=gianluca user_name="Gianluca" ip=192.168.2.50 pro
 
 | Field | Meaning |
 |---|---|
-| `result` | `success`, `failed` (wrong username/password), `failed_mfa` (wrong 2FA code), `blocked` (valid credentials refused by HA, e.g. inactive user), `aborted` (flow ended, e.g. too many 2FA retries; see `reason`) |
+| `result` | `success`, `failed` (wrong username/password), `failed_mfa` (wrong 2FA code), `blocked` (valid credentials refused by HA, e.g. inactive user), `aborted` (flow ended, e.g. too many 2FA retries; see `reason`), `invalid_auth` (request with an invalid or revoked token, e.g. an app that was logged out), `banned` (IP banned by `http.ban` after too many attempts) |
 | `user` | Username typed in the login form (attacker-controlled, sanitized) |
 | `user_name` | Display name of the matched HA user (success only) |
 | `ip` | Client IP as Home Assistant sees it (honours `trusted_proxies`) |
 | `provider` / `step` | Auth provider and flow step (`init`, `mfa`, ...) |
 | `client` / `host` / `ua` | OAuth client id, requested host, user agent |
+| `path` / `rdns` | `invalid_auth` only: requested path (query string removed) and reverse DNS of the IP |
 
 The same data is fired as the `auth_audit_login` event (plus `user_id` on success).
 
@@ -28,10 +29,11 @@ so they pass the default log level. The password is never read or logged.
 
 ## What it does not see
 
-Only interactive logins (username + password through the login page or the
-companion app's login screen). Refresh tokens, long-lived access tokens and
-already logged-in apps never go through a login flow, so they are not logged.
-Invalid tokens are still logged by Home Assistant's own `http.ban` warning.
+Successful use of tokens: refresh tokens, long-lived access tokens and
+already logged-in apps never go through a login flow, so only interactive
+logins (username + password) are logged as `success`. Requests with an invalid
+or revoked token *are* logged, as `invalid_auth`, from Home Assistant's own
+`http.ban` warning; they carry no username because a token has none.
 
 ## Install
 

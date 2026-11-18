@@ -11,6 +11,11 @@ methods to emit one structured line per attempt:
   outcome together with the HTTP request (client IP, host, user agent).
 
 Both are internal APIs: they are patched defensively and restored on unload.
+
+Requests rejected for invalid authentication outside the login flow (a
+revoked token on the websocket or the REST API, a bad refresh token) only
+produce http.ban's warning: a logging filter on that logger turns them into
+AUTH_AUDIT lines too (result=invalid_auth / banned), with no extra patching.
 """
 
 from __future__ import annotations
@@ -113,6 +118,25 @@ class AuthAuditor:
 
         self._restore.append(restore)
 
+        # Everything else HA rejects (invalid or revoked tokens on the API or
+        # the websocket, bad refresh tokens...) only reaches http.ban's
+        # warning. Listen to that logger instead of patching more internals.
+        ban_logger = logging.getLogger(_BAN_LOGGER)
+        ban_filter = _BanLogFilter(self)
+        ban_logger.addFilter(ban_filter)
+        self._restore.append(lambda: ban_logger.removeFilter(ban_filter))
+
+    def emit(self, fields: dict[str, Any], user_id: str | None = None) -> None:
+        """Write one AUTH_AUDIT line and fire the matching event."""
+        fields = {k: v for k, v in fields.items() if v not in (None, "")}
+        _LOGGER.warning("%s %s", LOG_TAG, _logfmt(fields))
+        event = {k: _clean(v, 256) for k, v in fields.items()}
+        if user_id:
+            event["user_id"] = user_id
+        self.hass.loop.call_soon_threadsafe(
+            self.hass.bus.async_fire, EVENT_LOGIN, event
+        )
+
     @callback
     def uninstall(self) -> None:
         """Put the original methods back."""
@@ -189,11 +213,46 @@ class AuthAuditor:
             "host": request.host,
             "ua": request.headers.get("user-agent"),
         }
-        fields = {k: v for k, v in fields.items() if v not in (None, "")}
+        self.emit(fields, user_id)
 
-        _LOGGER.warning("%s %s", LOG_TAG, _logfmt(fields))
 
-        event = {k: _clean(v, 256) for k, v in fields.items()}
-        if user_id:
-            event["user_id"] = user_id
-        self.hass.bus.async_fire(EVENT_LOGIN, event)
+_BAN_LOGGER = "homeassistant.components.http.ban"
+_INVALID_AUTH_RE = re.compile(
+    r"^Login attempt or request with invalid authentication from "
+    r"(?P<rdns>.*) \((?P<ip>[^()\s]+)\)\. Requested URL: '(?P<url>[^']*)'\. "
+    r"\((?P<ua>.*)\)$",
+    re.DOTALL,
+)
+_BANNED_RE = re.compile(r"^Banned IP (?P<ip>\S+) for too many login attempts$")
+
+
+class _BanLogFilter(logging.Filter):
+    """Turn http.ban's warnings into AUTH_AUDIT lines; never drops a record."""
+
+    def __init__(self, auditor: AuthAuditor) -> None:
+        super().__init__()
+        self._auditor = auditor
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            self._handle(record.getMessage())
+        except Exception:  # never break HA logging because of auditing
+            _LOGGER.debug("auth_audit: could not parse %s", _BAN_LOGGER, exc_info=True)
+        return True
+
+    def _handle(self, message: str) -> None:
+        if match := _INVALID_AUTH_RE.match(message):
+            path = match["url"].split("?", 1)[0]  # query strings can hold secrets
+            if path.startswith("/auth/login_flow"):
+                return  # already recorded, with the username, by the flow hook
+            fields: dict[str, Any] = {
+                "result": "invalid_auth",
+                "ip": match["ip"],
+                "path": path,
+            }
+            if match["rdns"] != match["ip"]:
+                fields["rdns"] = match["rdns"]
+            fields["ua"] = None if match["ua"] == "None" else match["ua"]
+            self._auditor.emit(fields)
+        elif match := _BANNED_RE.match(message):
+            self._auditor.emit({"result": "banned", "ip": match["ip"]})

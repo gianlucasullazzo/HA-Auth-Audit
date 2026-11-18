@@ -105,3 +105,44 @@ async def test_failed_then_success(hass, ha_provider, hass_client_no_auth, caplo
     flow_id = await _start(client, ha_provider)
     await _step(client, flow_id, "gianluca", "bad")
     assert _audit_lines(caplog) == []
+
+
+async def test_invalid_token_is_logged(hass, hass_client_no_auth, caplog):
+    assert await async_setup_component(hass, "http", {})
+    assert await async_setup_component(hass, "api", {})
+    assert await async_setup_component(hass, "websocket_api", {})
+    entry = MockConfigEntry(domain=DOMAIN, data={})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    events = []
+    hass.bus.async_listen(EVENT_LOGIN, events.append)
+    caplog.set_level(logging.WARNING)
+    client = await hass_client_no_auth()
+
+    resp = await client.get(
+        "/api/?secret=xyz",
+        headers={"Authorization": "Bearer not-a-token", "User-Agent": "Watch/1.0"},
+    )
+    assert resp.status == 401
+
+    async with client.ws_connect("/api/websocket") as ws:
+        await ws.receive_json()  # auth_required
+        await ws.send_json({"type": "auth", "access_token": "not-a-token"})
+        assert (await ws.receive_json())["type"] == "auth_invalid"
+    await hass.async_block_till_done()
+
+    lines = _audit_lines(caplog)
+    print("\n".join(lines))
+    assert any(l.startswith("AUTH_AUDIT result=invalid_auth ip=127.0.0.1 path=/api/ ") and "ua=Watch/1.0" in l for l in lines)
+    assert all("secret" not in l for l in lines)
+    assert any("path=/api/websocket" in l for l in lines)
+    assert [e.data["result"] for e in events].count("invalid_auth") == 2
+
+    # removed on unload
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    caplog.clear()
+    await client.get("/api/", headers={"Authorization": "Bearer nope"})
+    await hass.async_block_till_done()
+    assert _audit_lines(caplog) == []
